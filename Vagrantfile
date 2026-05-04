@@ -4,7 +4,7 @@
 # ============================================================
 # Vagrantfile — Two-node Oracle Linux 9 HA Cluster
 # ============================================================
-# Apple Silicon (M1/M2/M3) with VirtualBox
+# x86_64 (Intel/AMD) with VirtualBox
 #
 # Usage:
 #   vagrant up              — create and provision both nodes
@@ -20,8 +20,8 @@
 #   brew install ansible
 # ============================================================
 
-BOX_NAME    = "oraclelinux/9-aarch64"
-BOX_URL     = "https://oracle.github.io/vagrant-projects/boxes/oraclelinux/9-aarch64.json"
+BOX_NAME    = "oraclelinux/9"
+BOX_URL     = "https://oracle.github.io/vagrant-projects/boxes/oraclelinux/9.json"
 
 # Second disk for DRBD — one per node
 DRBD_DISK_SIZE_GB = 5
@@ -35,7 +35,7 @@ NODES = [
 Vagrant.configure("2") do |config|
 
   # ----------------------------------------------------------
-  # Base box — Oracle Linux 9 (Apple Silicon / aarch64)
+  # Base box — Oracle Linux 9 (Intel/AMD)
   # ----------------------------------------------------------
   config.vm.box     = BOX_NAME
   config.vm.box_url = BOX_URL
