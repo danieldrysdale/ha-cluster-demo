@@ -1,0 +1,13 @@
+---
+# ============================================================
+# site.yml — Full build in one pass
+# ============================================================
+# Runs install.yml then configure.yml sequentially.
+# Use this for a completely fresh build of both nodes.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.ini site.yml
+# ============================================================
+
+- import_playbook: install.yml
+- import_playbook: configure.yml

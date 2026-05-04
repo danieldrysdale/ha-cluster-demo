@@ -1,0 +1,35 @@
+---
+# ============================================================
+# install.yml — Package installation only
+# ============================================================
+# Installs all required packages on both nodes without
+# performing any cluster configuration. Safe to re-run.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.ini install.yml
+# ============================================================
+
+- name: Install all cluster packages
+  hosts: cluster_nodes
+  gather_facts: true
+
+  tasks:
+    - name: Base OS packages and utilities
+      include_tasks: tasks/01_base_packages.yml
+      tags: base
+
+    - name: Hostname and /etc/hosts configuration
+      include_tasks: tasks/02_networking.yml
+      tags: networking
+
+    - name: DRBD kernel module and userspace tools
+      include_tasks: tasks/03_drbd_install.yml
+      tags: drbd
+
+    - name: Pacemaker, Corosync, and pcs
+      include_tasks: tasks/05_corosync_install.yml
+      tags: pacemaker
+
+    - name: FastAPI demo app dependencies
+      include_tasks: tasks/07_demo_app.yml
+      tags: demo

@@ -1,0 +1,61 @@
+---
+# ============================================================
+# 07 — Demo app deployment
+# ============================================================
+# Installs the FastAPI heartbeat service on both nodes.
+# The service is managed by Pacemaker and runs only on
+# whichever node is currently Primary.
+#
+# KEY FIX: pip3 path issues. We use /usr/bin/pip3 explicitly
+# and uvicorn is installed to /usr/local/bin. The systemd
+# ExecStart uses the full path to avoid PATH issues with sudo.
+#
+# After this task runs:
+#   curl http://192.168.56.200:8080/status
+# ============================================================
+
+- name: Install FastAPI and uvicorn
+  pip:
+    name:
+      - fastapi
+      - "uvicorn[standard]"
+    executable: /usr/bin/pip3
+    state: present
+  # Using full path to pip3 to avoid sudo PATH issues.
+  # Packages install to /usr/local/lib and /usr/local/bin.
+
+- name: Create demo app directory
+  file:
+    path: "{{ demo_app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy heartbeat service Python app
+  copy:
+    src: ha-demo/heartbeat_service.py
+    dest: "{{ demo_app_dir }}/heartbeat_service.py"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Deploy systemd service file
+  copy:
+    src: ha-demo/ha-heartbeat.service
+    dest: /etc/systemd/system/ha-heartbeat.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: true
+
+- name: Ensure data directory exists
+  file:
+    path: "{{ drbd_mount_point }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'

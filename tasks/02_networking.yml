@@ -1,0 +1,25 @@
+---
+# ============================================================
+# 02 — Networking
+# ============================================================
+# Sets hostnames and writes /etc/hosts so nodes can reach
+# each other by name. Required for Corosync and DRBD.
+# ============================================================
+
+- name: Set hostname on node1
+  hostname:
+    name: node1
+  when: inventory_hostname == 'node1'
+
+- name: Set hostname on node2
+  hostname:
+    name: node2
+  when: inventory_hostname == 'node2'
+
+- name: Write /etc/hosts with both node IPs
+  template:
+    src: hosts.j2
+    dest: /etc/hosts
+    owner: root
+    group: root
+    mode: '0644'

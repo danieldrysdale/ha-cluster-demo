@@ -1,0 +1,28 @@
+resource {{ drbd_resource_name }} {
+  protocol C;
+
+  disk {
+    on-io-error detach;
+  }
+
+  net {
+    allow-two-primaries no;
+    after-sb-0pri discard-younger-primary;
+    after-sb-1pri discard-secondary;
+    after-sb-2pri disconnect;
+  }
+
+  on node1 {
+    device    {{ drbd_device }};
+    disk      {{ drbd_disk }};
+    address   {{ node1_ip }}:{{ drbd_port }};
+    meta-disk internal;
+  }
+
+  on node2 {
+    device    {{ drbd_device }};
+    disk      {{ drbd_disk }};
+    address   {{ node2_ip }}:{{ drbd_port }};
+    meta-disk internal;
+  }
+}

@@ -1,0 +1,57 @@
+---
+# ============================================================
+# 03 — DRBD installation
+# ============================================================
+# Installs DRBD kernel modules and userspace utilities.
+#
+# KEY FIX: The kernel module package name must match the
+# running kernel version exactly. We use ansible_kernel
+# (gathered from the VM at runtime) rather than a hardcoded
+# version, which caused failures on kernel upgrades.
+#
+# After this task runs:
+#   lsmod | grep drbd    — confirms module is loaded
+# ============================================================
+
+- name: Install DRBD userspace packages
+  dnf:
+    name:
+      - drbd
+      - drbd-utils
+    state: present
+
+- name: Install DRBD kernel modules for running kernel
+  dnf:
+    name: "kernel-uek-modules-{{ ansible_kernel }}"
+    state: present
+  # ansible_kernel is gathered automatically by Ansible's
+  # setup module and reflects the currently running kernel,
+  # not the latest installed kernel. This ensures the module
+  # package always matches what's actually running.
+
+- name: Load DRBD kernel module
+  modprobe:
+    name: drbd
+    state: present
+
+- name: Ensure DRBD module loads on boot
+  lineinfile:
+    path: /etc/modules-load.d/drbd.conf
+    line: drbd
+    create: true
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Ensure firewalld is running
+  systemd:
+    name: firewalld
+    state: started
+    enabled: true
+
+- name: Open DRBD replication port in firewall
+  firewalld:
+    port: "{{ drbd_port }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true

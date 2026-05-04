@@ -1,0 +1,183 @@
+---
+# ============================================================
+# 06 — Cluster configuration
+# ============================================================
+# Authenticates nodes, creates the cluster, starts it,
+# and configures all Pacemaker resources and constraints.
+#
+# All pcs commands run on node1 only — pcs propagates
+# configuration to node2 automatically via corosync.
+#
+# Resource order (enforced by constraints):
+#   1. DrbdData promoted  (DRBD Primary elected)
+#   2. DrbdFS started     (DRBD device mounted at /data)
+#   3. Heartbeat started  (FastAPI demo service started)
+#   4. VirtualIP started  (floating IP made active)
+#
+# After this task runs:
+#   pcs status            — all resources Started, no errors
+# ============================================================
+
+- name: Authenticate cluster nodes with pcs
+  command: >
+    pcs host auth node1 addr={{ node1_ip }} node2 addr={{ node2_ip }}
+    -u {{ cluster_user }} -p {{ cluster_password }}
+  when: inventory_hostname == 'node1'
+  register: pcs_auth
+  changed_when: "'Authorized' in pcs_auth.stdout"
+  failed_when: pcs_auth.rc != 0
+
+- name: Check if cluster already exists
+  command: pcs cluster status
+  register: cluster_exists
+  changed_when: false
+  failed_when: false
+  when: inventory_hostname == 'node1'
+
+- name: Create cluster
+  command: >
+    pcs cluster setup {{ cluster_name }}
+    node1 addr={{ node1_ip }}
+    node2 addr={{ node2_ip }}
+    --force
+  when:
+    - inventory_hostname == 'node1'
+    - cluster_exists.rc != 0
+  # --force destroys any existing cluster config before recreating.
+  # Skipped if cluster already exists.
+
+- name: Start cluster on all nodes
+  command: pcs cluster start --all
+  when: inventory_hostname == 'node1'
+
+- name: Enable cluster to start on boot
+  command: pcs cluster enable --all
+  when: inventory_hostname == 'node1'
+
+- name: Wait for cluster to stabilise
+  pause:
+    seconds: 10
+  when: inventory_hostname == 'node1'
+
+- name: Disable STONITH (lab environment only)
+  command: pcs property set stonith-enabled=false
+  when: inventory_hostname == 'node1'
+  # STONITH (fencing) is essential in production to protect
+  # shared data from split-brain. Disabled here for lab use only.
+
+- name: Set no-quorum-policy to ignore (lab environment only)
+  command: pcs property set no-quorum-policy=ignore
+  when: inventory_hostname == 'node1'
+  # With only 2 nodes and no STONITH, Pacemaker will refuse to
+  # promote resources after a hard node failure without this setting.
+  # In production with STONITH this is not required — the fence
+  # agent guarantees the failed node is truly dead before promotion.
+
+- name: Hand DRBD resource control to Pacemaker
+  block:
+    - name: Demote DRBD to Secondary (hand off to Pacemaker)
+      command: drbdadm secondary {{ drbd_resource_name }}
+      failed_when: false
+
+    - name: Bring DRBD resource down (hand off to Pacemaker)
+      command: drbdadm down {{ drbd_resource_name }}
+      failed_when: false
+  when: inventory_hostname == 'node1'
+  # Pacemaker must control DRBD promotion/demotion.
+  # If DRBD is already up from the configure step, we bring
+  # it down so Pacemaker can take ownership cleanly.
+
+- name: Check if Pacemaker resources already exist
+  command: pcs resource status DrbdData
+  register: resources_exist
+  changed_when: false
+  failed_when: false
+  when: inventory_hostname == 'node1'
+
+- name: Create DRBD promotable resource
+  command: pcs resource create DrbdData ocf:linbit:drbd drbd_resource={{ drbd_resource_name }} op monitor interval=30s
+  when:
+    - inventory_hostname == 'node1'
+    - resources_exist.rc != 0
+
+- name: Make DRBD resource promotable (Primary/Secondary)
+  command: pcs resource promotable DrbdData
+  when:
+    - inventory_hostname == 'node1'
+    - resources_exist.rc != 0
+
+- name: Set DRBD clone meta parameters correctly
+  command: >
+    pcs resource meta DrbdData-clone
+    promoted-max=1 promoted-node-max=1
+    clone-max=2 clone-node-max=1 notify=true
+  when:
+    - inventory_hostname == 'node1'
+    - resources_exist.rc != 0
+  # KEY FIX: meta parameters must be set separately after promotable
+  # is created. Setting them inline with 'pcs resource promotable'
+  # using the meta keyword causes them to be silently ignored,
+  # resulting in 'meta parameter misconfigured' errors in pcs status.
+
+- name: Create filesystem resource
+  command: >
+    pcs resource create DrbdFS ocf:heartbeat:Filesystem
+    device={{ drbd_device }}
+    directory={{ drbd_mount_point }}
+    fstype={{ drbd_filesystem }}
+    op monitor interval=20s
+  when:
+    - inventory_hostname == 'node1'
+    - resources_exist.rc != 0
+
+- name: Create demo heartbeat service resource
+  command: pcs resource create Heartbeat systemd:ha-heartbeat op monitor interval=10s
+  when:
+    - inventory_hostname == 'node1'
+    - resources_exist.rc != 0
+
+- name: Create floating VIP resource
+  command: >
+    pcs resource create VirtualIP ocf:heartbeat:IPaddr2
+    ip={{ vip_address }}
+    cidr_netmask={{ vip_cidr }}
+    op monitor interval=10s
+  when:
+    - inventory_hostname == 'node1'
+    - resources_exist.rc != 0
+
+- name: Set ordering constraints
+  command: "{{ item }}"
+  loop:
+    - "pcs constraint order promote DrbdData-clone then start DrbdFS"
+    - "pcs constraint order DrbdFS then Heartbeat"
+    - "pcs constraint order Heartbeat then VirtualIP"
+  when:
+    - inventory_hostname == 'node1'
+    - resources_exist.rc != 0
+
+- name: Set colocation constraints
+  command: "{{ item }}"
+  loop:
+    - "pcs constraint colocation add DrbdFS with promoted DrbdData-clone INFINITY"
+    - "pcs constraint colocation add Heartbeat with DrbdFS INFINITY"
+    - "pcs constraint colocation add VirtualIP with Heartbeat INFINITY"
+  when:
+    - inventory_hostname == 'node1'
+    - resources_exist.rc != 0
+
+- name: Wait for resources to start
+  pause:
+    seconds: 20
+  when: inventory_hostname == 'node1'
+
+- name: Show final cluster status
+  command: pcs status
+  register: final_status
+  changed_when: false
+  when: inventory_hostname == 'node1'
+
+- name: Display cluster status
+  debug:
+    msg: "{{ final_status.stdout_lines }}"
+  when: inventory_hostname == 'node1'

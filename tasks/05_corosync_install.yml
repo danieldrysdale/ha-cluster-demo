@@ -1,0 +1,81 @@
+---
+# ============================================================
+# 05 — Corosync and Pacemaker installation
+# ============================================================
+# Installs pcs, corosync, pacemaker, and fence agents.
+# Starts and enables pcsd (the pcs daemon) on both nodes.
+# Sets the hacluster user password for pcs authentication.
+#
+# KEY FIX: Pacemaker and corosync are not available in EPEL
+# on Oracle Linux 9 aarch64. They must be installed from the
+# ol9_addons repository which provides libknet1 and all deps.
+#
+# KEY FIX: drbd-pacemaker package required for ocf:linbit:drbd
+# resource agent. Without it pcs cannot manage DRBD resources.
+#
+# KEY FIX: firewalld must be running before firewall-cmd tasks.
+#
+# After this task runs:
+#   systemctl status pcsd   — should be active/running
+# ============================================================
+ 
+- name: Ensure firewalld is running
+  systemd:
+    name: firewalld
+    state: started
+    enabled: true
+ 
+- name: Enable Oracle Linux Addons repository
+  command: dnf config-manager --enable ol9_addons
+  changed_when: false
+  # ol9_addons provides libknet1 and other HA dependencies
+  # not available in EPEL on Oracle Linux 9 aarch64
+ 
+- name: Install Pacemaker, Corosync, and pcs
+  dnf:
+    name:
+      - pacemaker
+      - corosync
+      - pcs
+      - fence-agents-all
+      - drbd-pacemaker
+    state: present
+    enablerepo: ol9_addons
+  # drbd-pacemaker provides the ocf:linbit:drbd resource agent
+  # required for Pacemaker to manage DRBD promotion/demotion
+ 
+- name: Enable and start pcsd
+  systemd:
+    name: pcsd
+    state: started
+    enabled: true
+ 
+- name: Set hacluster user password
+  user:
+    name: hacluster
+    password: "{{ cluster_password | password_hash('sha512') }}"
+  # The hacluster user is created by the pacemaker package.
+  # pcs authentication requires this password to be set.
+  # NOTE: requires passlib on the Ansible controller (macOS):
+  # /opt/homebrew/opt/python@3.11/bin/python3.11 -m pip install passlib
+ 
+- name: Open cluster ports in firewall
+  firewalld:
+    port: "{{ item }}"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop:
+    - "2224/tcp"   # pcsd
+    - "3121/tcp"   # pacemaker
+    - "5404/udp"   # corosync
+    - "5405/udp"   # corosync
+    - "5406/udp"   # corosync
+    - "21064/tcp"  # DLM
+ 
+- name: Open demo app port in firewall
+  firewalld:
+    port: "{{ demo_app_port }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true

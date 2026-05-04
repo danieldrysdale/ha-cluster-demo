@@ -1,0 +1,29 @@
+---
+# ============================================================
+# group_vars/all.yml — Cluster-wide variables
+# ============================================================
+
+# Node IPs
+node1_ip: "192.168.56.101"
+node2_ip: "192.168.56.102"
+
+# Floating VIP — moves with the Primary node
+vip_address: "192.168.56.200"
+vip_cidr: "24"
+
+# DRBD
+drbd_resource_name: "r0"
+drbd_device: "/dev/drbd0"
+drbd_disk: "/dev/sdb"
+drbd_filesystem: "xfs"
+drbd_mount_point: "/data"
+drbd_port: "7789"
+
+# Cluster
+cluster_name: "hacluster"
+cluster_user: "hacluster"
+cluster_password: "hacluster"
+
+# Demo app
+demo_app_port: 8080
+demo_app_dir: "/opt/ha-demo"

@@ -1,0 +1,16 @@
+[Unit]
+Description=HA Cluster Heartbeat Service
+After=network.target
+# Do not add Wants=network.target — Pacemaker manages start/stop ordering
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/ha-demo/heartbeat_service.py
+Restart=on-failure
+RestartSec=2
+User=root
+WorkingDirectory=/opt/ha-demo
+
+[Install]
+# Do NOT enable this service directly — Pacemaker manages it
+# WantedBy=multi-user.target

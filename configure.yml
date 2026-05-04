@@ -1,0 +1,28 @@
+---
+# ============================================================
+# configure.yml — Cluster configuration
+# ============================================================
+# Configures DRBD, Corosync, Pacemaker, and all resources.
+# Assumes install.yml has already been run successfully.
+# Safe to re-run — all tasks check current state before acting.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.ini configure.yml
+#
+# Run individual steps with tags:
+#   ansible-playbook -i inventory/hosts.ini configure.yml --tags drbd
+#   ansible-playbook -i inventory/hosts.ini configure.yml --tags cluster
+# ============================================================
+
+- name: Configure DRBD, Corosync, Pacemaker, and demo app
+  hosts: cluster_nodes
+  gather_facts: true
+
+  tasks:
+    - name: Configure DRBD resource and initialise replication
+      include_tasks: tasks/04_drbd_configure.yml
+      tags: drbd
+
+    - name: Create and configure Pacemaker cluster
+      include_tasks: tasks/06_cluster_configure.yml
+      tags: cluster

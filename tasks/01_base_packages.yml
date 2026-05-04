@@ -1,0 +1,43 @@
+---
+# ============================================================
+# 01 — Base packages
+# ============================================================
+# Installs EPEL, base utilities, and chrony time sync.
+# Disables SELinux enforcement (required for DRBD/Pacemaker).
+# ============================================================
+
+- name: Install EPEL repository
+  dnf:
+    name: epel-release
+    state: present
+
+- name: Install base utilities
+  dnf:
+    name:
+      - vim
+      - curl
+      - wget
+      - net-tools
+      - bind-utils
+      - lsof
+      - chrony
+      - python3
+      - python3-pip
+    state: present
+
+- name: Enable and start chrony
+  systemd:
+    name: chronyd
+    state: started
+    enabled: true
+
+- name: Set SELinux to permissive
+  selinux:
+    policy: targeted
+    state: permissive
+
+- name: Disable SELinux permanently
+  lineinfile:
+    path: /etc/selinux/config
+    regexp: '^SELINUX='
+    line: 'SELINUX=permissive'
