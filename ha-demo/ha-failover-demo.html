@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HA Cluster — Live Failover Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0a0c0f;
+    --bg2:       #0f1215;
+    --bg3:       #151a1f;
+    --border:    #1e2530;
+    --text:      #c8d4e0;
+    --muted:     #4a5a6a;
+    --green:     #00d084;
+    --green-dim: rgba(0, 208, 132, 0.08);
+    --amber:     #f0a500;
+    --amber-dim: rgba(240, 165, 0, 0.08);
+    --red:       #ff4560;
+    --red-dim:   rgba(255, 69, 96, 0.08);
+    --blue:      #3d9eff;
+    --mono:      'JetBrains Mono', monospace;
+    --display:   'Syne', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Grid noise texture overlay ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── Header ── */
+  header {
+    padding: 2.5rem 0 2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .header-left h1 {
+    font-family: var(--display);
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    margin-bottom: 0.4rem;
+  }
+
+  .header-left p {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  .vip-badge {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+
+  .vip-badge span {
+    color: var(--blue);
+    font-weight: 500;
+  }
+
+  /* ── Status indicator ── */
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    display: inline-block;
+    margin-right: 6px;
+    transition: background 0.3s;
+  }
+
+  .status-dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+  .status-dot.gap    { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: pulse 0.5s infinite; }
+  .status-dot.error  { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ── Main grid ── */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    margin: 2rem 0;
+  }
+
+  .metric-card {
+    background: var(--bg2);
+    padding: 2rem;
+    position: relative;
+    overflow: hidden;
+    transition: background 0.3s;
+  }
+
+  .metric-card::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--border);
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+
+  .metric-card.active::after  { background: var(--green); box-shadow: 0 0 12px var(--green); }
+  .metric-card.gap::after     { background: var(--amber); box-shadow: 0 0 12px var(--amber); }
+  .metric-card.failover::after { background: var(--red);  box-shadow: 0 0 12px var(--red); }
+
+  .metric-label {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+
+  .metric-value {
+    font-family: var(--display);
+    font-size: 2.8rem;
+    font-weight: 800;
+    color: #fff;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    transition: color 0.3s;
+    word-break: break-all;
+  }
+
+  .metric-value.green  { color: var(--green); }
+  .metric-value.amber  { color: var(--amber); }
+  .metric-value.red    { color: var(--red); }
+  .metric-value.mono   { font-family: var(--mono); font-size: 1.8rem; font-weight: 700; }
+
+  .metric-sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 0.75rem;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Timeline ── */
+  .timeline-section {
+    margin: 0 0 2rem;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+
+  .section-title {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .section-count {
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  .timeline {
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    height: 180px;
+    overflow-y: auto;
+    font-size: 11px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .timeline-row {
+    display: grid;
+    grid-template-columns: 140px 80px 1fr 60px;
+    gap: 1rem;
+    padding: 6px 1rem;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    transition: background 0.2s;
+  }
+
+  .timeline-row:hover { background: var(--bg3); }
+
+  .timeline-row.node-change {
+    background: var(--amber-dim);
+    border-left: 2px solid var(--amber);
+  }
+
+  .timeline-row.gap-row {
+    background: var(--red-dim);
+    border-left: 2px solid var(--red);
+    font-style: italic;
+    color: var(--muted);
+  }
+
+  .timeline-ts   { color: var(--muted); font-size: 10px; }
+  .timeline-node { color: var(--blue); font-weight: 500; }
+  .timeline-counter { color: var(--green); font-weight: 700; text-align: right; }
+
+  .timeline-event {
+    font-size: 10px;
+    color: var(--amber);
+    letter-spacing: 0.04em;
+  }
+
+  /* ── Node status panels ── */
+  .nodes-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    margin-bottom: 2rem;
+  }
+
+  .node-card {
+    background: var(--bg2);
+    padding: 1.5rem 2rem;
+    position: relative;
+  }
+
+  .node-card.primary {
+    background: var(--green-dim);
+    border-left: 2px solid var(--green);
+  }
+
+  .node-card.secondary {
+    border-left: 2px solid var(--border);
+  }
+
+  .node-name {
+    font-family: var(--display);
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: #fff;
+    margin-bottom: 0.5rem;
+  }
+
+  .node-role {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    display: inline-block;
+    margin-bottom: 0.75rem;
+  }
+
+  .node-role.primary-role   { color: var(--green); border: 1px solid var(--green); }
+  .node-role.secondary-role { color: var(--muted); border: 1px solid var(--border); }
+
+  .node-detail {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.8;
+  }
+
+  /* ── Failover chart ── */
+  .chart-section {
+    margin-bottom: 2rem;
+  }
+
+  #counter-chart {
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    width: 100%;
+    height: 100px;
+    display: block;
+  }
+
+  /* ── Controls ── */
+  .controls {
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    padding: 1.5rem 2rem;
+    margin-bottom: 2rem;
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .control-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }
+
+  .cmd {
+    font-size: 11px;
+    color: var(--green);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    display: inline-block;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+    user-select: all;
+  }
+
+  .cmd:hover { border-color: var(--green); }
+
+  /* ── Footer ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 1.5rem 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+
+  #last-update { color: var(--muted); }
+
+  /* ── Failover flash ── */
+  @keyframes failover-flash {
+    0%   { background: var(--red-dim); }
+    50%  { background: rgba(255,69,96,0.2); }
+    100% { background: var(--bg); }
+  }
+
+  .failover-flash { animation: failover-flash 1.5s ease-out; }
+
+  @media (max-width: 700px) {
+    .main-grid { grid-template-columns: 1fr; }
+    .nodes-grid { grid-template-columns: 1fr; }
+    .timeline-row { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <header>
+    <div class="header-left">
+      <h1>HA Cluster Monitor</h1>
+      <p>Live failover visualisation · DRBD + Pacemaker + Corosync</p>
+    </div>
+    <div class="header-right">
+      <div class="vip-badge">VIP <span>192.168.56.200:8080</span></div>
+      <div id="connection-status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text" style="font-size:11px; letter-spacing:0.04em;">connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main metrics -->
+  <div class="main-grid">
+    <div class="metric-card" id="card-counter">
+      <div class="metric-label">Heartbeat Counter</div>
+      <div class="metric-value green" id="counter">—</div>
+      <div class="metric-sub">increments every second on primary</div>
+    </div>
+    <div class="metric-card" id="card-node">
+      <div class="metric-label">Active Node</div>
+      <div class="metric-value mono" id="active-node">—</div>
+      <div class="metric-sub" id="node-sub">serving via VIP</div>
+    </div>
+    <div class="metric-card" id="card-uptime">
+      <div class="metric-label">Last Heartbeat</div>
+      <div class="metric-value mono" id="last-heartbeat" style="font-size:1.1rem;">—</div>
+      <div class="metric-sub" id="gap-indicator">—</div>
+    </div>
+  </div>
+
+  <!-- Node panels -->
+  <div class="nodes-grid">
+    <div class="node-card" id="node1-card">
+      <div class="node-name">node1</div>
+      <div class="node-role secondary-role" id="node1-role">secondary</div>
+      <div class="node-detail" id="node1-detail">192.168.56.101 · DRBD Unpromoted</div>
+    </div>
+    <div class="node-card primary" id="node2-card">
+      <div class="node-name">node2</div>
+      <div class="node-role primary-role" id="node2-role">primary</div>
+      <div class="node-detail" id="node2-detail">192.168.56.102 · DRBD Promoted · VIP active</div>
+    </div>
+  </div>
+
+  <!-- Counter chart -->
+  <div class="chart-section">
+    <div class="section-header">
+      <div class="section-title">Counter over time</div>
+      <div class="section-count" id="chart-note">last 60 seconds</div>
+    </div>
+    <canvas id="counter-chart"></canvas>
+  </div>
+
+  <!-- Event timeline -->
+  <div class="timeline-section">
+    <div class="section-header">
+      <div class="section-title">Event log</div>
+      <div class="section-count" id="event-count">0 events</div>
+    </div>
+    <div class="timeline" id="timeline">
+      <div class="timeline-row" style="color: var(--muted); font-style: italic; grid-template-columns: 1fr;">
+        <span style="padding: 0.5rem 0;">Waiting for first heartbeat...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div>
+      <div class="control-label">Trigger failover (standby node2)</div>
+      <div class="cmd" onclick="copyCmd(this)">vagrant ssh node2 -c "sudo pcs node standby node2"</div>
+    </div>
+    <div>
+      <div class="control-label">Restore node2</div>
+      <div class="cmd" onclick="copyCmd(this)">vagrant ssh node2 -c "sudo pcs node unstandby node2"</div>
+    </div>
+    <div>
+      <div class="control-label">Hard stop (simulates crash)</div>
+      <div class="cmd" onclick="copyCmd(this)">vagrant halt node2</div>
+    </div>
+  </div>
+
+  <footer>
+    <span>Daniel Drysdale · HA Cluster Demo · DRBD + Pacemaker + Corosync on Oracle Linux 9</span>
+    <span id="last-update">—</span>
+  </footer>
+
+</div>
+
+<script>
+const API = 'http://192.168.56.200:8080';
+const POLL_INTERVAL = 1000;
+
+let state = {
+  lastCounter: null,
+  lastNode: null,
+  lastTimestamp: null,
+  events: [],
+  chartData: [],
+  failoverCount: 0,
+  consecutiveErrors: 0,
+};
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const $counter      = document.getElementById('counter');
+const $activeNode   = document.getElementById('active-node');
+const $nodeSub      = document.getElementById('node-sub');
+const $lastHB       = document.getElementById('last-heartbeat');
+const $gapIndicator = document.getElementById('gap-indicator');
+const $statusDot    = document.getElementById('status-dot');
+const $statusText   = document.getElementById('status-text');
+const $timeline     = document.getElementById('timeline');
+const $eventCount   = document.getElementById('event-count');
+const $lastUpdate   = document.getElementById('last-update');
+const $cardCounter  = document.getElementById('card-counter');
+const $cardNode     = document.getElementById('card-node');
+const $cardUptime   = document.getElementById('card-uptime');
+const canvas        = document.getElementById('counter-chart');
+const ctx           = canvas.getContext('2d');
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function fmtTime(isoStr) {
+  if (!isoStr) return '—';
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString('en-AU', { hour12: false });
+}
+
+function secAgo(isoStr) {
+  if (!isoStr) return null;
+  return ((Date.now() - new Date(isoStr).getTime()) / 1000).toFixed(1);
+}
+
+function copyCmd(el) {
+  navigator.clipboard.writeText(el.textContent.trim()).then(() => {
+    const orig = el.style.color;
+    el.style.color = 'var(--amber)';
+    setTimeout(() => el.style.color = orig, 600);
+  });
+}
+
+// ── Timeline ──────────────────────────────────────────────────────────────────
+function addEvent(type, data) {
+  state.events.unshift({ type, ...data, ts: new Date().toISOString() });
+  if (state.events.length > 200) state.events.pop();
+  renderTimeline();
+}
+
+function renderTimeline() {
+  if (state.events.length === 0) return;
+  $eventCount.textContent = `${state.events.length} events`;
+
+  const rows = state.events.map(ev => {
+    if (ev.type === 'heartbeat') {
+      return `<div class="timeline-row${ev.nodeChanged ? ' node-change' : ''}">
+        <span class="timeline-ts">${fmtTime(ev.ts)}</span>
+        <span class="timeline-node">${ev.node}</span>
+        <span class="timeline-event">${ev.nodeChanged ? '⚡ NODE CHANGED' : ''}</span>
+        <span class="timeline-counter">#${ev.counter}</span>
+      </div>`;
+    }
+    if (ev.type === 'gap') {
+      return `<div class="timeline-row gap-row">
+        <span class="timeline-ts">${fmtTime(ev.ts)}</span>
+        <span style="color:var(--red); grid-column: 2 / 5;">⚠ Connection lost — ${ev.duration}s gap</span>
+      </div>`;
+    }
+    if (ev.type === 'restored') {
+      return `<div class="timeline-row node-change">
+        <span class="timeline-ts">${fmtTime(ev.ts)}</span>
+        <span class="timeline-node">${ev.node}</span>
+        <span style="color:var(--green);">✓ Service restored after failover</span>
+        <span class="timeline-counter">#${ev.counter}</span>
+      </div>`;
+    }
+    return '';
+  }).join('');
+
+  $timeline.innerHTML = rows;
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+function resizeCanvas() {
+  canvas.width = canvas.offsetWidth;
+  canvas.height = canvas.offsetHeight;
+}
+
+function drawChart() {
+  resizeCanvas();
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  if (state.chartData.length < 2) return;
+
+  const vals = state.chartData.map(d => d.counter);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || 1;
+
+  const xStep = w / (state.chartData.length - 1);
+
+  // Draw gap zones
+  ctx.fillStyle = 'rgba(255,69,96,0.06)';
+  for (let i = 1; i < state.chartData.length; i++) {
+    if (state.chartData[i].gap) {
+      ctx.fillRect((i - 1) * xStep, 0, xStep, h);
+    }
+  }
+
+  // Draw line
+  ctx.beginPath();
+  ctx.strokeStyle = 'var(--green)';
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = 'var(--green)';
+  ctx.shadowBlur = 6;
+
+  state.chartData.forEach((d, i) => {
+    const x = i * xStep;
+    const y = h - ((d.counter - min) / range) * (h - 16) - 8;
+    if (i === 0) ctx.moveTo(x, y);
+    else if (d.gap) {
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+// ── Node panels ───────────────────────────────────────────────────────────────
+function updateNodePanels(activeNode) {
+  const nodes = ['node1', 'node2'];
+  nodes.forEach(n => {
+    const card = document.getElementById(`${n}-card`);
+    const role = document.getElementById(`${n}-role`);
+    const detail = document.getElementById(`${n}-detail`);
+    const ip = n === 'node1' ? '192.168.56.101' : '192.168.56.102';
+
+    if (n === activeNode) {
+      card.className = 'node-card primary';
+      role.className = 'node-role primary-role';
+      role.textContent = 'primary';
+      detail.textContent = `${ip} · DRBD Promoted · VIP active`;
+    } else {
+      card.className = 'node-card secondary';
+      role.className = 'node-role secondary-role';
+      role.textContent = 'secondary';
+      detail.textContent = `${ip} · DRBD Unpromoted`;
+    }
+  });
+}
+
+// ── Main poll loop ────────────────────────────────────────────────────────────
+async function poll() {
+  try {
+    const resp = await fetch(`${API}/status`, { signal: AbortSignal.timeout(2000) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    const cur = data.current;
+    if (!cur || !cur.counter) return;
+
+    const wasInGap = state.consecutiveErrors > 0;
+    state.consecutiveErrors = 0;
+
+    const nodeChanged = state.lastNode && state.lastNode !== cur.node;
+    const counterJumped = state.lastCounter && (cur.counter - state.lastCounter) > 3;
+
+    // Update metrics
+    $counter.textContent = cur.counter.toLocaleString();
+    $activeNode.textContent = cur.node;
+    $nodeSub.textContent = `via ${API.replace('http://', '')}`;
+    $lastHB.textContent = fmtTime(cur.timestamp);
+
+    const ago = secAgo(cur.timestamp);
+    $gapIndicator.textContent = ago ? `${ago}s ago` : '—';
+
+    // Status indicator
+    $statusDot.className = 'status-dot online';
+    $statusText.textContent = 'connected';
+
+    // Card states
+    $cardCounter.className = 'metric-card active';
+    $cardNode.className = 'metric-card active';
+    $cardUptime.className = 'metric-card active';
+
+    // Node panels
+    updateNodePanels(cur.node);
+
+    // Events
+    if (wasInGap) {
+      const gapDuration = (state.consecutiveErrors * POLL_INTERVAL / 1000).toFixed(1);
+      addEvent('restored', { node: cur.node, counter: cur.counter, duration: gapDuration });
+      document.body.classList.add('failover-flash');
+      setTimeout(() => document.body.classList.remove('failover-flash'), 1500);
+    } else if (nodeChanged) {
+      addEvent('heartbeat', { node: cur.node, counter: cur.counter, nodeChanged: true });
+      state.failoverCount++;
+    } else {
+      addEvent('heartbeat', { node: cur.node, counter: cur.counter, nodeChanged: false });
+    }
+
+    // Chart data
+    state.chartData.push({ counter: cur.counter, gap: wasInGap });
+    if (state.chartData.length > 60) state.chartData.shift();
+    drawChart();
+
+    state.lastCounter = cur.counter;
+    state.lastNode = cur.node;
+    state.lastTimestamp = cur.timestamp;
+    $lastUpdate.textContent = `last update: ${fmtTime(new Date().toISOString())}`;
+
+  } catch (err) {
+    state.consecutiveErrors++;
+
+    $statusDot.className = state.consecutiveErrors > 2 ? 'status-dot error' : 'status-dot gap';
+    $statusText.textContent = state.consecutiveErrors > 2 ? 'connection lost' : 'gap detected...';
+
+    $cardCounter.className = 'metric-card gap';
+    $cardNode.className = 'metric-card gap';
+    $cardUptime.className = 'metric-card failover';
+
+    $counter.style.color = 'var(--amber)';
+    $gapIndicator.textContent = `⚠ no response for ${state.consecutiveErrors}s`;
+
+    if (state.consecutiveErrors === 1) {
+      addEvent('gap', { duration: '...' });
+    }
+
+    // Add gap point to chart
+    if (state.lastCounter) {
+      state.chartData.push({ counter: state.lastCounter, gap: true });
+      if (state.chartData.length > 60) state.chartData.shift();
+      drawChart();
+    }
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+window.addEventListener('resize', drawChart);
+setInterval(poll, POLL_INTERVAL);
+poll();
+</script>
+</body>
+</html>
