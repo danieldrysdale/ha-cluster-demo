@@ -1,0 +1,20 @@
+# Force LF line endings for all text files
+* text=auto eol=lf
+
+# Explicitly LF for these file types
+*.yml text eol=lf
+*.yaml text eol=lf
+*.rb text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.html text eol=lf
+*.j2 text eol=lf
+*.ini text eol=lf
+*.conf text eol=lf
+Vagrantfile text eol=lf
+
+# Binary files — no line ending conversion
+*.vdi binary
+*.vmdk binary
+*.box binary
