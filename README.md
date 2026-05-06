@@ -1,6 +1,9 @@
-# ha-cluster-demo
+# ha-cluster-demo (x86_64)
 
 A two-node High Availability cluster built with DRBD, Corosync, and Pacemaker on Oracle Linux 9, with a live failover visualiser that demonstrates automatic service recovery and data persistence across node failures.
+
+> **Branch:** `x86_64` — for Intel/AMD Windows hosts running VirtualBox
+> **Branch:** `main` — for Apple Silicon (M1/M2/M3) macOS hosts
 
 ## What it demonstrates
 
@@ -32,63 +35,131 @@ node1 (192.168.56.101)              node2 (192.168.56.102)
 
 | Layer | Technology |
 |---|---|
-| OS | Oracle Linux 9.5 (aarch64) |
+| OS | Oracle Linux 9.5 (x86_64) |
 | Virtualisation | VirtualBox + Vagrant |
 | Block replication | DRBD 9 (Protocol C synchronous) |
 | Cluster manager | Pacemaker 2.1 |
 | Messaging | Corosync |
 | Cluster CLI | pcs |
 | Demo service | FastAPI + uvicorn |
-| Provisioning | Ansible |
+| Provisioning | Ansible (via WSL) |
 
 ## Prerequisites
 
-- macOS with VirtualBox and Vagrant installed
-- Ansible installed: `brew install ansible`
-- passlib for Ansible's Python on macOS:
-  `/opt/homebrew/opt/python@3.11/bin/python3.11 -m pip install passlib`
-- The `vagrant-scp` plugin is **not** required — file transfer uses `tee` via SSH
+### Windows host requirements
+- VirtualBox installed on Windows
+- Vagrant 2.4.9+ installed on Windows (download from vagrantup.com)
+- WSL 2 with Ubuntu installed: `wsl --install`
+- Git available (either in WSL or Windows)
 
-## Project structure
+### WSL (Ubuntu) requirements
+```bash
+# Install matching Vagrant version in WSL
+wget https://releases.hashicorp.com/vagrant/2.4.9/vagrant_2.4.9-1_amd64.deb
+sudo dpkg -i vagrant_2.4.9-1_amd64.deb
 
+# Install Ansible and passlib
+sudo apt update && sudo apt install -y ansible python3-pip
+pip3 install passlib
 ```
-ha-cluster-demo/
-├── Vagrantfile                     # VM definitions — 2x OL9, 20GB OS + 5GB DRBD disk
-├── inventory/
-│   └── hosts.ini                   # Node IPs and SSH key paths
-├── group_vars/
-│   └── all.yml                     # Cluster variables (IPs, VIP, disk, ports)
-├── templates/
-│   ├── hosts.j2                    # /etc/hosts template
-│   └── drbd_resource.res.j2        # DRBD resource definition
-├── tasks/
-│   ├── 01_base_packages.yml        # EPEL, utilities, chrony, SELinux permissive
-│   ├── 02_networking.yml           # Hostnames and /etc/hosts
-│   ├── 03_drbd_install.yml         # DRBD kernel module (matched to running kernel)
-│   ├── 04_drbd_configure.yml       # DRBD resource, metadata, sync, filesystem
-│   ├── 05_corosync_install.yml     # pcs, pacemaker, corosync packages + firewall
-│   ├── 06_cluster_configure.yml    # pcs auth, cluster create, resources, constraints
-│   └── 07_demo_app.yml             # FastAPI heartbeat service deployment
-├── ha-demo/
-│   ├── heartbeat_service.py        # FastAPI app — writes heartbeat to /data every second
-│   ├── ha-heartbeat.service        # systemd unit file (managed by Pacemaker)
-│   └── ha-failover-demo.html       # Live failover visualiser (open on your Mac)
-├── install.yml                     # Install packages only
-├── configure.yml                   # Configure cluster and resources
-└── site.yml                        # Full build — install + configure
+
+### WSL environment variables
+Add to `~/.bashrc`:
+```bash
+export VAGRANT_WSL_ENABLE_WINDOWS_ACCESS="1"
+export PATH="$PATH:/mnt/c/Program Files/Oracle/VirtualBox"
 ```
+
+## Important — Two terminal workflow
+
+Due to WSL2 networking limitations, Vagrant and Ansible must be run from different terminals:
+
+| Task | Terminal |
+|---|---|
+| `vagrant up`, `vagrant halt`, `vagrant destroy` | **PowerShell** |
+| `ansible-playbook`, `ansible` | **WSL (Ubuntu)** |
 
 ## Quick start
 
-### 1. Start the VMs
+### 1. Clone the repo (PowerShell)
 
-```bash
+```powershell
+cd C:\Users\YourName\Documents\projects
+git clone https://github.com/danieldrysdale/ha-cluster-demo.git
+cd ha-cluster-demo
+git checkout x86_64
+```
+
+### 2. Start the VMs (PowerShell)
+
+```powershell
 vagrant up
 ```
 
-Both VMs will boot and provision automatically. This takes 5-10 minutes.
+Both VMs will boot. This takes 5-10 minutes on first run as the box is downloaded.
 
-### 2. Run the Ansible playbooks
+### 3. Fix SSH key permissions (PowerShell)
+
+VirtualBox creates SSH keys that Windows SSH considers too permissive:
+
+```powershell
+foreach ($node in @("node1", "node2")) {
+    $keyPath = "$(Get-Location)\.vagrant\machines\$node\virtualbox\private_key"
+    icacls $keyPath /inheritance:r
+    icacls $keyPath /remove "Everyone"
+    icacls $keyPath /remove "NT AUTHORITY\SYSTEM"
+    icacls $keyPath /remove "BUILTIN\Administrators"
+    icacls $keyPath /remove "NULL SID"
+    icacls $keyPath /grant:r "$($env:USERNAME):(R)"
+}
+```
+
+Verify SSH works:
+```powershell
+vagrant ssh node1
+vagrant ssh node2
+```
+
+### 4. Set up SSH keys in WSL
+
+Copy the private keys to the WSL filesystem so Ansible can use them:
+
+```bash
+mkdir -p ~/.ssh/vagrant-keys
+cp /mnt/c/Users/YourName/Documents/projects/ha-cluster-demo/.vagrant/machines/node1/virtualbox/private_key ~/.ssh/vagrant-keys/node1
+cp /mnt/c/Users/YourName/Documents/projects/ha-cluster-demo/.vagrant/machines/node2/virtualbox/private_key ~/.ssh/vagrant-keys/node2
+chmod 600 ~/.ssh/vagrant-keys/node1
+chmod 600 ~/.ssh/vagrant-keys/node2
+```
+
+**Note:** Repeat this step any time you run `vagrant destroy` and `vagrant up` — new keys are generated each time.
+
+### 5. Update inventory with your username (WSL)
+
+Edit `inventory/hosts.ini` and replace `YourName` with your Windows username:
+
+```ini
+[cluster_nodes]
+node1 ansible_host=192.168.56.101 ansible_ssh_private_key_file=~/.ssh/vagrant-keys/node1
+node2 ansible_host=192.168.56.102 ansible_ssh_private_key_file=~/.ssh/vagrant-keys/node2
+
+[cluster_nodes:vars]
+ansible_user=vagrant
+ansible_become=true
+ansible_become_method=sudo
+ansible_ssh_common_args=-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes
+```
+
+### 6. Verify Ansible can reach the nodes (WSL)
+
+```bash
+cd /mnt/c/Users/YourName/Documents/projects/ha-cluster-demo
+ansible -i inventory/hosts.ini all -m ping
+```
+
+Both nodes should return `pong`.
+
+### 7. Run the Ansible playbooks (WSL)
 
 ```bash
 # Install all packages
@@ -98,10 +169,10 @@ ansible-playbook -i inventory/hosts.ini install.yml
 ansible-playbook -i inventory/hosts.ini configure.yml
 ```
 
-### 3. Verify the cluster
+### 8. Verify the cluster (WSL)
 
 ```bash
-vagrant ssh node1 -c "sudo pcs status"
+ansible node1 -i inventory/hosts.ini -m command -a "pcs status" --become
 ```
 
 Expected output — all resources Started on one node, no errors:
@@ -115,54 +186,74 @@ Full List of Resources:
   * VirtualIP    (ocf:heartbeat:IPaddr2):   Started node1
 ```
 
-### 4. Test the API
+### 9. Test the API (WSL)
 
 ```bash
-curl http://192.168.56.200:8080/status
+curl http://192.168.56.200:8080/status | python3 -m json.tool
 ```
 
-### 5. Open the live visualiser
+### 10. Open the live visualiser
 
-Open `ha-demo/ha-failover-demo.html` in your browser. It polls the VIP every second and displays the live counter, active node, and event history.
+Open `ha-demo\ha-failover-demo.html` in your Windows browser. It polls the VIP every second and displays the live counter, active node, and event history.
 
 ## Triggering a failover
 
 ### Graceful standby (recommended for demo)
-The cleanest way to demonstrate failover — Pacemaker gracefully migrates all resources:
 
 ```bash
 # Put the current primary into standby — resources move to the other node
-vagrant ssh node1 -c "sudo pcs node standby node1"
+ansible node1 -i inventory/hosts.ini -m command -a "pcs node standby node1" --become
 
 # Bring it back (resources stay where they are)
-vagrant ssh node1 -c "sudo pcs node unstandby node1"
+ansible node1 -i inventory/hosts.ini -m command -a "pcs node unstandby node1" --become
 ```
 
 ### Hard stop (simulates a crash)
-Simulates a sudden node failure. Because STONITH is disabled in this lab, an extra manual step is required (see STONITH section below):
 
-```bash
-# Hard stop node1
+From PowerShell:
+```powershell
 vagrant halt node1
+```
 
-# Wait ~30 seconds, then on node2:
-vagrant ssh node2 -c "sudo drbdadm primary --force r0"
-vagrant ssh node2 -c "sudo pcs resource cleanup"
+Then from WSL after ~30 seconds:
+```bash
+ansible node2 -i inventory/hosts.ini -m command -a "drbdadm primary --force r0" --become
+ansible node2 -i inventory/hosts.ini -m command -a "pcs resource cleanup" --become
+```
 
-# Bring node1 back — DRBD resyncs automatically
+Bring node1 back from PowerShell:
+```powershell
 vagrant up node1
 ```
 
+Then copy the new SSH key in WSL:
+```bash
+cp /mnt/c/Users/YourName/Documents/projects/ha-cluster-demo/.vagrant/machines/node1/virtualbox/private_key ~/.ssh/vagrant-keys/node1
+chmod 600 ~/.ssh/vagrant-keys/node1
+```
+
 ### Repeatable demo sequence
+
 ```bash
 # Failover to node2
-vagrant ssh node1 -c "sudo pcs node standby node1"
-vagrant ssh node1 -c "sudo pcs node unstandby node1"
+ansible node1 -i inventory/hosts.ini -m command -a "pcs node standby node1" --become
+ansible node1 -i inventory/hosts.ini -m command -a "pcs node unstandby node1" --become
 
 # Failover back to node1
-vagrant ssh node2 -c "sudo pcs node standby node2"
-vagrant ssh node2 -c "sudo pcs node unstandby node2"
+ansible node2 -i inventory/hosts.ini -m command -a "pcs node standby node2" --become
+ansible node2 -i inventory/hosts.ini -m command -a "pcs node unstandby node2" --become
 ```
+
+## x86_64 specific notes
+
+### DRBD disk device naming
+On x86_64, VirtualBox may present the OS disk and DRBD disk in different orders on different VMs (sda/sdb may be swapped). This branch uses a udev rule to create a consistent `/dev/drbd-disk` symlink based on disk size (5GB), ensuring DRBD always uses the correct device regardless of enumeration order.
+
+### SSH key workflow
+Unlike macOS where Vagrant manages SSH transparently, on Windows/WSL the SSH keys need to be manually copied to the WSL filesystem and their permissions set. This is a one-time setup per `vagrant destroy`/`vagrant up` cycle.
+
+### Vagrant from PowerShell only
+VirtualBox on Windows cannot be controlled from WSL2 directly without version matching and environment variable configuration. Running Vagrant from PowerShell is the most reliable approach.
 
 ## STONITH and fencing
 
@@ -170,15 +261,7 @@ vagrant ssh node2 -c "sudo pcs node unstandby node2"
 
 STONITH (Shoot The Other Node In The Head) is a fencing mechanism that forcibly powers off a failed node before promoting the surviving node to Primary. Without it, there is a risk of split-brain — both nodes believing they are Primary and writing to what they think is their own copy of the data, causing permanent data corruption.
 
-The sequence in a properly fenced cluster:
-1. Pacemaker detects node1 is gone
-2. Fence agent powers off node1 via IPMI/BMC — guaranteed dead
-3. Pacemaker promotes node2, knowing node1 cannot write anything
-4. Fully automatic — no human intervention required
-
 ### How fencing works in production
-
-In real-world deployments the fence agent depends on the infrastructure:
 
 | Environment | Fence agent | Mechanism |
 |---|---|---|
@@ -189,30 +272,9 @@ In real-world deployments the fence agent depends on the infrastructure:
 | KVM/libvirt | `fence_virsh` | libvirt API |
 | VirtualBox (lab) | Custom script | `VBoxManage controlvm poweroff` |
 
-The key principle: the fence mechanism must be completely independent of the node being fenced. IPMI/BMC operates on its own network interface and power circuit — even a completely hung OS cannot prevent it from cutting power.
-
 ### Why STONITH is disabled in this lab
 
-VirtualBox does not have a native fence agent in the standard fence-agents package. Implementing a custom fence agent requires SSH access from the VM to the Mac host to run VBoxManage — adding complexity that obscures the core HA concepts this demo is designed to illustrate.
-
-Consequence: Hard node failures (vagrant halt) require the manual drbdadm primary --force step. Graceful standby (pcs node standby) works fully automatically and is the recommended demo method.
-
-In production: STONITH is non-negotiable for any cluster with shared data. Never disable it in a real environment.
-
-## Architecture notes
-
-### Why DRBD Protocol C?
-Protocol C (synchronous) means a write is only acknowledged to the application after it has been written to disk on both nodes. This guarantees zero data loss on failover at the cost of write latency. The counter demo proves this — it always resumes exactly where it left off with no missed increments.
-
-### Why a floating VIP?
-The VIP (192.168.56.200) always points to the current Primary. The demo UI and curl commands always use the VIP — they do not need to know which physical node is active. This is the standard pattern for HA services.
-
-### Resource ordering and colocation
-Pacemaker constraints ensure resources always start and stop in the correct order:
-```
-DrbdData (promoted) -> DrbdFS (mounted) -> Heartbeat (started) -> VirtualIP (active)
-```
-Colocation constraints ensure all resources run on the same node as the DRBD Primary.
+VirtualBox does not have a native fence agent in the standard fence-agents package. STONITH is disabled for lab use only. In production, STONITH is non-negotiable for any cluster with shared data.
 
 ## Known issues and fixes applied
 
@@ -221,26 +283,39 @@ Colocation constraints ensure all resources run on the same node as the DRBD Pri
 | Module drbd not found | Kernel module package did not match running kernel | Use kernel-uek-modules-{{ ansible_kernel }} |
 | Couldn't mount device | Pacemaker resource configured for ext4, disk was XFS | Set drbd_filesystem: xfs in group_vars |
 | pip3: command not found | sudo PATH does not include pip3 location | Use executable: /usr/bin/pip3 in pip module |
-| create-md: Device busy | DRBD already configured, idempotency check unreliable | Check drbdadm status rc before running create-md |
-| Tags not working | Task files had no tags defined | Tags now on include_tasks in playbooks, not task files |
 | disk:Diskless state | DRBD up but no metadata — idempotency check missed this | Detect Diskless in status output and treat as needs create-md |
 | meta parameter misconfigured | pcs resource promotable meta params silently ignored | Set meta params separately with pcs resource meta DrbdData-clone |
-| ocf:linbit:drbd not installed | drbd-pacemaker package not in install list | Added drbd-pacemaker to 05_corosync_install.yml package list |
-| firewall not running | firewalld not started before firewall tasks | Added systemd: name=firewalld state=started before firewall tasks |
-| crypt.crypt not supported | passlib not installed for Ansible Python on macOS | Run /opt/homebrew/opt/python@3.11/bin/python3.11 -m pip install passlib |
-| libknet1 not found | Pacemaker deps not in EPEL, need Oracle ol9_addons repo | Added enablerepo: ol9_addons to pacemaker install task |
+| ocf:linbit:drbd not installed | drbd-pacemaker package not in install list | Added drbd-pacemaker to 05_corosync_install.yml |
+| firewall not running | firewalld not started before firewall tasks | Added systemd: name=firewalld state=started |
+| libknet1 not found | Pacemaker deps not in EPEL on OL9 aarch64 | Added enablerepo: ol9_addons to pacemaker install task |
 | Hard stop failover fails | No STONITH — Pacemaker will not promote without fencing | Added no-quorum-policy=ignore plus manual drbdadm primary --force |
 | Metadata settle timing | drbdadm up fails immediately after create-md | Added 3 second pause after create-md |
+| DRBD disk sda/sdb inconsistent | x86_64 VirtualBox presents disks in different order per VM | udev rule creates /dev/drbd-disk symlink based on disk size |
+| VBoxManage path error from WSL | WSL paths not understood by Windows VBoxManage | Convert /mnt/c/... paths to C:\... in Vagrantfile |
+| SSH key permissions | Windows NTFS permissions too open for SSH | icacls to restrict key + copy to WSL filesystem |
+| Vagrant version mismatch | WSL Vagrant version must match Windows Vagrant version | Install matching version in WSL |
+| dump-md hangs | drbdadm dump-md hangs when resource is active | Replace with drbdadm show for idempotency check |
 
 ## Shutting down
 
-```bash
+From PowerShell:
+```powershell
 vagrant halt
 ```
 
-To destroy and rebuild from scratch:
-```bash
+To destroy and rebuild from scratch (PowerShell then WSL):
+```powershell
 vagrant destroy -f
 vagrant up
-ansible-playbook -i inventory/hosts.ini site.yml
+```
+```bash
+# Copy new SSH keys after rebuild
+cp /mnt/c/Users/YourName/Documents/projects/ha-cluster-demo/.vagrant/machines/node1/virtualbox/private_key ~/.ssh/vagrant-keys/node1
+cp /mnt/c/Users/YourName/Documents/projects/ha-cluster-demo/.vagrant/machines/node2/virtualbox/private_key ~/.ssh/vagrant-keys/node2
+chmod 600 ~/.ssh/vagrant-keys/node1
+chmod 600 ~/.ssh/vagrant-keys/node2
+
+# Run playbooks
+ansible-playbook -i inventory/hosts.ini install.yml
+ansible-playbook -i inventory/hosts.ini configure.yml
 ```
