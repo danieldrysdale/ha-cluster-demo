@@ -21,10 +21,15 @@
 # KEY FIX: pause after create-md to allow metadata to settle
 # before bringing the resource up.
 #
+# KEY FIX: drbdadm dump-md used to verify metadata actually
+# exists on the physical disk — handles cases where the disk
+# device changes (e.g. x86_64 vs aarch64 disk ordering) and
+# DRBD knows the resource but has no metadata on the new disk.
+#
 # After this task runs:
 #   drbdadm status r0   — shows Primary/Secondary and sync %
 # ============================================================
- 
+
 - name: Deploy DRBD resource configuration
   template:
     src: drbd_resource.res.j2
@@ -32,7 +37,7 @@
     owner: root
     group: root
     mode: '0644'
- 
+
 - name: Check if DRBD resource is already configured
   command: drbdadm status {{ drbd_resource_name }}
   register: drbd_status_check
@@ -41,31 +46,47 @@
   # rc 0  = resource is up and configured
   # rc 10 = resource is known but down (needs 'up')
   # rc 20 = resource unknown (needs create-md)
- 
-- name: Check for Diskless state (metadata missing despite resource being known)
+
+- name: Check if DRBD metadata actually exists on disk
+  command: drbdadm show {{ drbd_resource_name }}
+  register: drbd_metadata_check
+  changed_when: false
+  failed_when: false
+  # rc 0  = metadata exists on the configured disk
+  # rc != 0 = no valid metadata found on disk
+  # This catches cases where the disk device changed (e.g.
+  # x86_64 vs aarch64 disk ordering) but DRBD still knows
+  # the resource from its config file.
+
+- name: Determine if DRBD metadata needs to be created
   set_fact:
-    drbd_needs_metadata: "{{ drbd_status_check.rc == 20 or 'Diskless' in drbd_status_check.stdout }}"
-  # disk:Diskless means DRBD is up but has no metadata on the disk.
-  # This happens when create-md was skipped but drbdadm up was run.
-  # We treat this the same as rc 20 — needs create-md.
- 
+    drbd_needs_metadata: >-
+      {{ drbd_status_check.rc == 20 or
+         'Diskless' in drbd_status_check.stdout or
+         drbd_metadata_check.rc != 0 }}
+  # True if:
+  # - Resource is completely unknown (rc 20)
+  # - Resource is up but disk is Diskless (no metadata)
+  # - Metadata doesn't exist on the physical disk (dump-md fails)
+
 - name: Bring DRBD resource down before creating metadata (if Diskless)
   command: drbdadm down {{ drbd_resource_name }}
   when: drbd_needs_metadata and drbd_status_check.rc == 0
   failed_when: false
- 
+
 - name: Create DRBD metadata on raw block device
   command: drbdadm create-md {{ drbd_resource_name }} --force
   when: drbd_needs_metadata
-  # Only run if resource is completely unknown or Diskless.
- 
+  # Only run if resource is completely unknown, Diskless,
+  # or metadata doesn't exist on the physical disk.
+
 - name: Wait for metadata to settle after create-md
   pause:
     seconds: 3
   when: drbd_needs_metadata
   # create-md writes metadata to disk — give it a moment
   # before attempting to bring the resource up.
- 
+
 - name: Bring DRBD resource up
   command: drbdadm up {{ drbd_resource_name }}
   register: drbd_up
@@ -73,7 +94,15 @@
   failed_when: drbd_up.rc not in [0, 10, 11]
   when: drbd_status_check.rc != 0 or drbd_needs_metadata
   # rc 10/11 = already up, which is fine
- 
+
+- name: Verify DRBD resource is up after bringing up
+  command: drbdadm status {{ drbd_resource_name }}
+  register: drbd_verify
+  failed_when: drbd_verify.rc not in [0, 10]
+  changed_when: false
+  when: drbd_status_check.rc != 0 or drbd_needs_metadata
+  # Confirm the resource came up successfully before proceeding
+
 - name: Promote node1 to DRBD Primary and force initial sync
   command: drbdadm primary --force {{ drbd_resource_name }}
   when:
@@ -81,7 +110,7 @@
     - drbd_needs_metadata
   # Only on fresh setup. Pacemaker manages promotion after
   # the cluster is configured.
- 
+
 - name: Wait for DRBD to be ready for formatting (node1 only)
   command: drbdadm status {{ drbd_resource_name }}
   register: drbd_ready
@@ -92,7 +121,7 @@
     - inventory_hostname == 'node1'
     - drbd_needs_metadata
   changed_when: false
- 
+
 - name: Create XFS filesystem on DRBD device (node1 only)
   filesystem:
     fstype: "{{ drbd_filesystem }}"
@@ -105,13 +134,12 @@
   # node2 receives the filesystem via block-level replication.
   # KEY FIX: filesystem module uses mkfs.xfs under the hood.
   # Without this step Pacemaker cannot mount /dev/drbd0.
- 
+
 - name: Show DRBD sync status
   command: drbdadm status {{ drbd_resource_name }}
   register: drbd_status
   changed_when: false
- 
+
 - name: Display DRBD status
   debug:
     msg: "{{ drbd_status.stdout_lines }}"
-

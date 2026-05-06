@@ -79,9 +79,14 @@ Vagrant.configure("2") do |config|
 
         # Force NIC 2 to virtio for consistent interface naming
         vb.customize ["modifyvm", :id, "--nictype2", "virtio"]
-        vb.customize ["modifyvm", :id, "--uart1", "0x3F8", "4"]
-        vb.customize ["modifyvm", :id, "--uartmode1", "file",
-                      File.join(Dir.tmpdir, "#{node[:name]}-console.log")]
+#        vb.customize ["modifyvm", :id, "--uart1", "0x3F8", "4"]
+#	if Dir.tmpdir.start_with?('/tmp')
+#	  tmpdir = "C:\\Windows\\Temp"
+#	else
+#	  tmpdir = Dir.tmpdir
+#	end
+#        vb.customize ["modifyvm", :id, "--uartmode1", "file",
+#		      File.join(tmpdir, "#{node[:name]}-console.log")]
 
         # Disable audio and USB to reduce overhead
         vb.customize ["modifyvm", :id, "--audio", "none"]
@@ -89,13 +94,24 @@ Vagrant.configure("2") do |config|
 
         # -------------------------------------------------------
         # Second disk for DRBD (/dev/sdb)
-        # Created as a fixed VDI alongside the VM
-        # -------------------------------------------------------
-        drbd_disk = File.join(
-          File.dirname(__FILE__),
-          ".vagrant",
-          "#{node[:name]}-drbd.vdi"
-        )
+	# Created as a fixed VDI alongside the VM
+	# Convert WSL path to Windows path for VBoxManage compatibility
+	vagrant_dir = File.dirname(File.expand_path(__FILE__))
+	if vagrant_dir.start_with?('/mnt/')
+	  # Running from WSL — convert to Windows path
+	  parts = vagrant_dir.split('/')
+	  drive = parts[2].upcase
+	  rest = parts[3..].join('\\')
+	  windows_dir = "#{drive}:\\#{rest}"
+	else
+	  windows_dir = vagrant_dir
+	end
+
+	drbd_disk = File.join(
+	  windows_dir,
+	  ".vagrant",
+	  "#{node[:name]}-drbd.vdi"
+	)
 
         unless File.exist?(drbd_disk)
           vb.customize [
@@ -108,7 +124,7 @@ Vagrant.configure("2") do |config|
         end
 
         vb.customize ["storageattach", :id,
-          "--storagectl", "VirtioSCSI",
+          "--storagectl", "SATA Controller",
           "--port",       1,
           "--device",     0,
           "--type",       "hdd",

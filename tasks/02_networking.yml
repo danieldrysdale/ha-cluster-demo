@@ -23,3 +23,17 @@
     owner: root
     group: root
     mode: '0644'
+
+- name: Create udev rule to identify DRBD disk by size
+  copy:
+    content: |
+      # Identify the DRBD disk by size (5GB = 10485760 512-byte blocks)
+      SUBSYSTEM=="block", KERNEL=="sd[a-z]", ATTR{size}=="10485760", SYMLINK+="drbd-disk"
+    dest: /etc/udev/rules.d/99-drbd-disk.rules
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Reload udev rules and trigger
+  shell: udevadm control --reload-rules && udevadm trigger
+  changed_when: false
